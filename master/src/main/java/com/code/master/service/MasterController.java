@@ -66,7 +66,7 @@ public class MasterController {
     private ProblemDocumentRepository problemDocumentRepository;
     @Autowired
     private ElasticsearchRestTemplate elasticsearchRestTemplate;
-//    @Autowired
+    @Autowired
     private SessionAccessor sessionAccessor;
 
     /*********************************** End Of API Definitions. *****************************************/
@@ -151,10 +151,17 @@ public class MasterController {
     }
 
     @GetMapping(path = "/problemById")
-    public String handleGetProblemById(Principal user, @RequestParam(value = "problemId") String problemId) { return GetProblemById(problemId); }
+    public String handleGetProblemById(Principal user,
+                                       @RequestParam(value = "problemId") String problemId) {
+        return GetProblemById(user.getName(), problemId);
+    }
 
     @GetMapping(path = "/google/problemById")
-    public String handleGoogleGetProblemById(@RequestParam(value = "problemId") String problemId) { return GetProblemById(problemId); }
+    public String handleGoogleGetProblemById(
+            @RequestParam(value = "userId") String userId,
+            @RequestParam(value = "problemId") String problemId) {
+        return GetProblemById(userId, problemId);
+    }
 
     @GetMapping(path = "/problemBaseCode")
     public String handleGetProblemBaseCode(@RequestParam(value = "languageId") String languageId,@RequestParam(value = "problemId") String problemId) {
@@ -277,8 +284,8 @@ public class MasterController {
     }
 
     @GetMapping(path = "/google/submission")
-    public String handleGetSubmission(@RequestParam(value = "submissionId") String submissionId) {
-        return GetCodeSubmission(submissionId);
+    public String handleGetSubmission(@RequestParam(value = "sessionId") String sessionId) {
+        return GetCodeSubmission(sessionId);
     }
 
     @GetMapping(path = "/google/autoComplete")
@@ -316,28 +323,30 @@ public class MasterController {
         UserSession u = this.sessionAccessor.getSessionFromProblem(userId, problemId);
         JSONObject jsonObject = new JSONObject();
         jsonObject.put("message", "Success") // Move "message" to "status".
+
                 .put("session", u.toString());
         return jsonObject.toString();
     }
 
-    @GetMapping(path = "/google/sessionById")
+    @GetMapping(path = "/google/session")
     public String handleGoogleGetSessionFromId(
             @RequestParam(value = "userId") String userId,
-            @RequestParam(value = "sessionId") String sessionId){
-        UserSession u = this.sessionAccessor.getSessionFromId(sessionId);
+            @RequestParam(value = "sessionId") String sessionId) {
+        UserSession userSession = this.sessionAccessor.getSessionFromId(sessionId);
         JSONObject jsonObject = new JSONObject();
-        jsonObject.put("message", "Success") // Move "message" to "status".
-                .put("session", u.toString());
+        // Move "message" to "status".
+        jsonObject.put("message", "Success");
+        if (userSession != null) {
+            jsonObject.put("submissionCode", userSession.getSolutionCode());
+        }
         return jsonObject.toString();
     }
 
-
-
     @PostMapping(path = "/google/session")
-    public String handleGoogleUpdateSession(Principal user, UpdateSessionHTTPRequest request) {
-        final String userId = user.getName();
+    public String handleGoogleUpdateSession(@RequestBody UpdateSessionHTTPRequest request) {
+        final String userId = request.getUserId();
         final String groupId = getGroupIdForAUser(userId);
-        final String sId = this.sessionAccessor.updateSession(
+        final String sessionId = this.sessionAccessor.updateSession(
                 request.getSessionId(),
                 userId,
                 groupId,
@@ -346,8 +355,8 @@ public class MasterController {
                 request.getLanguage(),
                 request.getSolutionCode());
         JSONObject response = new JSONObject();
-        response.put("message", "Sucesss")
-                .put("sessionId", sId);
+        response.put("message", "Success")
+                .put("sessionId", sessionId);
         return response.toString();
     }
 
@@ -760,7 +769,7 @@ public class MasterController {
             int pageIntId = Integer.parseInt(pageId);
             int startIdx = (pageIntId - 1) * Constants.FEED_PAGE_SIZE;
             int endIdx = min(submissions.size(), startIdx + Constants.FEED_PAGE_SIZE);
-            submissions = submissions.subList(startIdx, endIdx);
+//            submissions = submissions.subList(startIdx, endIdx);
             JSONArray arr = new JSONArray();
             for (SubmissionWrapper submission : submissions) {
                 JSONObject submissionJSONObject = ToJSONObject(submission, problemDescription, userNameIdMap);
@@ -780,7 +789,6 @@ public class MasterController {
         int pageIntId = Integer.parseInt(pageId);
         int startIdx = (pageIntId - 1) * Constants.FEED_PAGE_SIZE;
         int endIdx = min(submissions.size(), startIdx + Constants.FEED_PAGE_SIZE);
-        submissions = submissions.subList(startIdx, endIdx);
         JSONObject object = new JSONObject();
         JSONArray arr = new JSONArray();
         for (UserSubmission submission : submissions) {
@@ -801,6 +809,7 @@ public class MasterController {
                 .put("problemLink", submission.getProblemLink())
                 .put("solutionLink", submission.getSolutionLink())
                 .put("submissionDate", submission.getCreatedAt())
+                .put("userId", submission.getUserId())
                 .put("authorName", authorName);
         return object;
     }
@@ -813,13 +822,14 @@ public class MasterController {
         if (userIdNameMap.containsKey(submission.getUserId())) {
             authorName = userIdNameMap.get(submission.getUserId());
         }
-        object.put("problemName", problemDescription.getTitle());
-        object.put("problemLink", problemDescription.getUrl());
-        object.put("problemId", problemDescription.getProblemId());
-        object.put("submissionDate", submission.getCreatedAt());
-        object.put("submissionId", submission.getSubmissionId());
-        object.put("solutionLink", submission.getSolutionLink());
-        object.put("authorName", authorName);
+        object.put("problemName", problemDescription.getTitle())
+                .put("problemLink", problemDescription.getUrl())
+                .put("problemId", problemDescription.getProblemId())
+                .put("submissionDate", submission.getCreatedAt())
+                .put("submissionId", submission.getSubmissionId())
+                .put("solutionLink", submission.getSolutionLink())
+                .put("authorName", authorName)
+                .put("userId", submission.getUserId());
         return object;
     }
 
@@ -959,16 +969,19 @@ public class MasterController {
         return new JSONObject().put("message", "Success").toString();
     }
 
-    private String GetProblemById(String problemId) {
+    private String GetProblemById(String userId, String problemId) {
         ProblemDescription problemDescription = this.problemDescriptionRepository.getByProblemId(problemId);
         if (problemDescription != null) {
-            String jsonString = new JSONObject()
+            JSONObject jsonObject = new JSONObject()
                     .put("problemTitle", problemDescription.getTitle())
                     .put("problemIndex", problemDescription.getIndex())
                     .put("problemLink", problemDescription.getUrl())
-                    .put("description", problemDescription.getDescription())
-                    .toString();
-            return jsonString;
+                    .put("description", problemDescription.getDescription());
+            UserSession userSession =  this.sessionAccessor.getSessionFromProblem(userId, problemId);
+            if (userSession != null) {
+                jsonObject.put("sessionId", userSession.getSessionId());
+            }
+            return jsonObject.toString();
         }
         return "{}";
     }
@@ -1016,10 +1029,17 @@ public class MasterController {
                         .put("problemLink", problemDescription.getUrl())
                         .put("description", problemDescription.getDescription())
                         .put("problemId", problemDescription.getProblemId());
+                UserSession userSession =  this.sessionAccessor.getSessionFromProblem(userId, problemDescription.getProblemId());
+                if (userSession != null) {
+                    jsonObject.put("sessionId", userSession.getSessionId());
+                }
             }
         } catch (ParseException e) {
             System.out.printf("Error parsing date: {%s}\n", e);
         }
+
+        // Get the session for the problem & user pair.
+
         return jsonObject.toString();
     }
 
